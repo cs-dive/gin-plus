@@ -1,12 +1,15 @@
 package resp
 
 import (
+	"errors"
 	"fmt"
+	"github.com/archine/gin-plus/v3/exception"
 	"github.com/archine/gin-plus/v3/plugin/logger"
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
 	"net/http"
 	"reflect"
+	"sync"
 )
 
 // Respond to the client assistant and return quickly
@@ -20,15 +23,20 @@ const (
 	SystemErrorCode     = 50000
 )
 
+// ResultPool result pool
+var resultPool = sync.Pool{
+	New: func() interface{} {
+		return &Result{}
+	},
+}
+
 type Resp interface {
-	// WithMessage set the business message
-	WithMessage(message string) Resp
-	// WithCode set the business status code
-	WithCode(code int) Resp
-	// WithData set the response data
-	WithData(data interface{}) Resp
+	// WithBasic Set the basic properties
+	WithBasic(businessCode int, msg string, data any) Resp
+	// WithContext Must be set the context, otherwise it will null pointer exception
+	WithContext(ctx *gin.Context) Resp
 	// To response client
-	To()
+	To(httpCode ...int)
 }
 
 // PaginationResult  Paging result
@@ -41,41 +49,45 @@ type PaginationResult struct {
 
 // Result Return result
 type Result struct {
-	ctx      *gin.Context `json:"-"`
-	httpCode int          `json:"-"`             // http code
-	Code     int          `json:"err_code"`      // business code
-	Message  string       `json:"err_msg"`       // business message
-	Data     interface{}  `json:"ret,omitempty"` // Response data
+	ctx     *gin.Context `json:"-"`
+	Code    int          `json:"err_code"`           // business code
+	TraceId string       `json:"trace_id,omitempty"` // trace id, optional, can be empty. you can manually set it.
+	Message string       `json:"err_msg"`            // business message
+	Data    interface{}  `json:"ret,omitempty"`      // Response data
 }
 
-func (r *Result) WithMessage(message string) Resp {
-	r.Message = message
-	return r
-}
-
-func (r *Result) WithCode(code int) Resp {
+func (r *Result) WithBasic(code int, msg string, data any) Resp {
 	r.Code = code
-	return r
-}
-
-func (r *Result) WithData(data interface{}) Resp {
+	r.Message = msg
 	r.Data = data
 	return r
 }
 
-func (r *Result) To() {
+func (r *Result) WithContext(ctx *gin.Context) Resp {
+	r.ctx = ctx
+	return r
+}
+
+func (r *Result) To(httpCode ...int) {
+	r.TraceId = r.ctx.GetString("trace_id")
 	r.ctx.Set("bcode", r.Code)
-	r.ctx.JSON(r.httpCode, r)
+	if len(httpCode) > 0 {
+		r.ctx.JSON(httpCode[0], r)
+	} else {
+		r.ctx.JSON(http.StatusOK, r)
+	}
+	// release
+	r.ctx = nil
+	r.Code = 0
+	r.Message = ""
+	r.Data = nil
+	r.TraceId = ""
+	Recycle(r)
 }
 
 // InitResp initialize a custom structure
-func InitResp(ctx *gin.Context, httpCode int) *Result {
-	return &Result{
-		ctx:      ctx,
-		httpCode: httpCode,
-		Code:     0,
-		Message:  http.StatusText(httpCode),
-	}
+func InitResp(ctx *gin.Context) Resp {
+	return resultPool.Get().(Resp).WithContext(ctx)
 }
 
 // BadRequest business-related error returned.
@@ -86,14 +98,14 @@ func BadRequest(ctx *gin.Context, condition bool, msg ...string) bool {
 		if len(msg) > 0 {
 			message = msg[0]
 		}
-		InitResp(ctx, http.StatusOK).WithCode(BadRequestCode).WithMessage(message).To()
+		InitResp(ctx).WithBasic(BadRequestCode, message, nil).To()
 	}
 	return condition
 }
 
 // DirectBadRequest Directly return business-related errors.
 func DirectBadRequest(ctx *gin.Context, format string, args ...any) {
-	InitResp(ctx, http.StatusOK).WithCode(BadRequestCode).WithMessage(fmt.Sprintf(format, args...)).To()
+	InitResp(ctx).WithBasic(BadRequestCode, fmt.Sprintf(format, args...), nil).To()
 }
 
 // ParamInvalid invalid parameter.
@@ -104,7 +116,7 @@ func ParamInvalid(ctx *gin.Context, condition bool, msg ...string) bool {
 		if len(msg) > 0 {
 			message = msg[0]
 		}
-		InitResp(ctx, http.StatusOK).WithCode(ParamValidationCode).WithMessage(message).To()
+		InitResp(ctx).WithBasic(ParamValidationCode, message, nil).To()
 	}
 	return condition
 }
@@ -115,7 +127,7 @@ func ParamValidation(ctx *gin.Context, obj interface{}) bool {
 	if err == nil {
 		return true
 	}
-	InitResp(ctx, http.StatusOK).WithCode(ParamValidationCode).WithMessage(getValidMsg(err, obj)).To()
+	InitResp(ctx).WithBasic(ParamValidationCode, getValidMsg(err, obj), nil).To()
 	return false
 }
 
@@ -127,7 +139,7 @@ func Forbidden(ctx *gin.Context, condition bool, msg ...string) bool {
 		if len(msg) > 0 {
 			message = msg[0]
 		}
-		InitResp(ctx, http.StatusOK).WithCode(ForbiddenCode).WithMessage(message).To()
+		InitResp(ctx).WithBasic(ForbiddenCode, message, nil).To()
 	}
 	return condition
 }
@@ -140,7 +152,7 @@ func NoLogin(ctx *gin.Context, condition bool, msg ...string) bool {
 		if len(msg) > 0 {
 			message = msg[0]
 		}
-		InitResp(ctx, http.StatusUnauthorized).WithCode(NonLoginCode).WithMessage(message).To()
+		InitResp(ctx).WithBasic(NonLoginCode, message, nil).To(http.StatusUnauthorized)
 	}
 	return condition
 }
@@ -153,19 +165,19 @@ func LoginExpired(ctx *gin.Context, condition bool, msg ...string) bool {
 		if len(msg) > 0 {
 			message = msg[0]
 		}
-		InitResp(ctx, http.StatusUnauthorized).WithCode(TokenExpiredCode).WithMessage(message).To()
+		InitResp(ctx).WithBasic(TokenExpiredCode, message, nil).To(http.StatusUnauthorized)
 	}
 	return condition
 }
 
 // Ok Normal request with no data returned
 func Ok(ctx *gin.Context) {
-	InitResp(ctx, http.StatusOK).To()
+	InitResp(ctx).To()
 }
 
 // Json Normal request with data returned
 func Json(ctx *gin.Context, data interface{}) {
-	InitResp(ctx, http.StatusOK).WithCode(0).WithData(data).To()
+	InitResp(ctx).WithBasic(0, "ok", data).To()
 }
 
 // SeverError Server exception
@@ -176,14 +188,40 @@ func SeverError(ctx *gin.Context, condition bool, msg ...string) bool {
 		if len(msg) > 0 {
 			message = msg[0]
 		}
-		InitResp(ctx, http.StatusOK).WithCode(SystemErrorCode).WithMessage(message).To()
+		InitResp(ctx).WithBasic(SystemErrorCode, message, nil).To()
 	}
 	return condition
 }
 
 // DirectRespWithCode Respond directly and customize the business code
 func DirectRespWithCode(ctx *gin.Context, bCode int, format string, args ...any) {
-	InitResp(ctx, http.StatusOK).WithCode(bCode).WithMessage(fmt.Sprintf(format, args...)).To()
+	InitResp(ctx).WithBasic(bCode, fmt.Sprintf(format, args...), nil).To()
+}
+
+// DirectRespErr Respond directly with customize err
+func DirectRespErr(ctx *gin.Context, err error) {
+	result := InitResp(ctx).WithBasic(SystemErrorCode, "服务器异常,请联系管理员!", nil)
+	var businessErr *exception.BusinessException
+	if errors.As(err, &businessErr) {
+		result.WithBasic(businessErr.Code, businessErr.Msg, nil)
+	} else {
+		logger.Log.Error(err.Error())
+	}
+	result.To()
+}
+
+// ChangeResultType Change the result type
+func ChangeResultType(f func() Resp) {
+	resultPool = sync.Pool{
+		New: func() interface{} {
+			return f()
+		},
+	}
+}
+
+// Recycle the result object
+func Recycle(resp Resp) {
+	resultPool.Put(resp)
 }
 
 func getValidMsg(err error, obj interface{}) string {

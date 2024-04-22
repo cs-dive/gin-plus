@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/archine/gin-plus/v3/banner"
-	"github.com/archine/gin-plus/v3/exception"
+	"github.com/archine/gin-plus/v3/exception/interceptor"
 	"github.com/archine/gin-plus/v3/mvc"
 	"github.com/archine/gin-plus/v3/plugin/logger"
 	"github.com/archine/ioc"
@@ -56,7 +56,7 @@ func Default(confOptions ...viper.Option) *App {
 	return New(
 		confOptions,
 		gin.Logger(),
-		exception.GlobalExceptionInterceptor,
+		interceptor.GlobalExceptionInterceptor,
 		cors.New(cors.Config{
 			AllowMethods:     []string{"PUT", "PATCH", "POST", "GET", "DELETE", "OPTIONS", "HEAD"},
 			AllowHeaders:     []string{"Origin", "Authorization", "Content-Type"},
