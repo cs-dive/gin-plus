@@ -22,7 +22,7 @@ const (
 )
 
 type config struct {
-	Server struct {
+	Server *struct {
 		Port         int           `mapstructure:"port"`          // Application port
 		Env          string        `mapstructure:"env"`           // Application environment, default dev, you can set it to prod or test
 		MaxFileSize  int64         `mapstructure:"max_file_size"` // Maximum file size, default 100M
@@ -32,11 +32,11 @@ type config struct {
 }
 
 // LoadApplicationConfigFile load the application configuration file
-func LoadApplicationConfigFile(options []viper.Option) {
+func LoadApplicationConfigFile() {
 	var configFile string
 	flag.StringVar(&configFile, "c", "app.yml", "Absolute path to the project configuration file, default app.yml")
 	flag.Parse()
-	confReader := viper.NewWithOptions(options...)
+	confReader := viper.New()
 	confReader.SetConfigFile(configFile)
 	confReader.SetDefault("server.port", 4006)
 	confReader.SetDefault("server.env", Dev)

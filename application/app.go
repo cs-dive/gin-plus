@@ -11,7 +11,6 @@ import (
 	"github.com/archine/ioc"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
-	"github.com/spf13/viper"
 	"net/http"
 	"os"
 	"os/signal"
@@ -22,6 +21,7 @@ import (
 // App application instance
 type App struct {
 	e              *gin.Engine
+	preRunFunc     func()
 	preApplyFunc   func()
 	preStartFunc   func()
 	preStopFunc    func()
@@ -32,29 +32,16 @@ type App struct {
 }
 
 // New Create a clean application, you can add some gin middlewares to the engine
-func New(confOptions []viper.Option, middlewares ...gin.HandlerFunc) *App {
-	LoadApplicationConfigFile(confOptions)
-	if Conf.Server.Env == Prod {
-		gin.SetMode(gin.ReleaseMode)
-	} else {
-		gin.SetMode(gin.DebugMode)
-	}
+func New(middlewares ...gin.HandlerFunc) *App {
 	return &App{
 		exitDelay:      3 * time.Second,
 		ginMiddlewares: middlewares,
-		server: &http.Server{
-			Addr:                         fmt.Sprintf(":%d", Conf.Server.Port),
-			ReadTimeout:                  Conf.Server.ReadTimeout,
-			WriteTimeout:                 Conf.Server.WriteTimeout,
-			DisableGeneralOptionsHandler: true,
-		},
 	}
 }
 
 // Default Create a default application with gin default logger, exception interception, and cross-domain middleware
-func Default(confOptions ...viper.Option) *App {
+func Default() *App {
 	return New(
-		confOptions,
 		gin.Logger(),
 		interceptor.GlobalExceptionInterceptor,
 		cors.New(cors.Config{
@@ -89,17 +76,16 @@ func (a *App) Interceptor(interceptor ...mvc.MethodInterceptor) *App {
 
 // Run the main program entry
 func (a *App) Run() {
+	if a.preRunFunc != nil {
+		a.preRunFunc()
+	}
 	if logger.Log == nil {
 		logger.Log = &logger.DefaultLog{}
 	}
-	a.e = gin.New()
-	a.server.Handler = a.e
-	if len(a.ginMiddlewares) > 0 {
-		a.e.Use(a.ginMiddlewares...)
+	if Conf.Server == nil {
+		LoadApplicationConfigFile()
 	}
-	a.e.MaxMultipartMemory = Conf.Server.MaxFileSize
-	a.e.RemoveExtraSlash = true
-	ioc.SetBeans(a.e)
+	a.initServer()
 	if banner.Banner != "" {
 		fmt.Print(banner.Banner)
 	}
@@ -152,6 +138,29 @@ func (a *App) Run() {
 	logger.Log.Debug("Server exiting ...")
 }
 
+// initServer init gin server
+func (a *App) initServer() {
+	a.server = &http.Server{
+		Addr:                         fmt.Sprintf(":%d", Conf.Server.Port),
+		ReadTimeout:                  Conf.Server.ReadTimeout,
+		WriteTimeout:                 Conf.Server.WriteTimeout,
+		DisableGeneralOptionsHandler: true,
+	}
+	if Conf.Server.Env == Prod {
+		gin.SetMode(gin.ReleaseMode)
+	} else {
+		gin.SetMode(gin.DebugMode)
+	}
+	a.e = gin.New()
+	a.server.Handler = a.e
+	if len(a.ginMiddlewares) > 0 {
+		a.e.Use(a.ginMiddlewares...)
+	}
+	a.e.MaxMultipartMemory = Conf.Server.MaxFileSize
+	a.e.RemoveExtraSlash = true
+	ioc.SetBeans(a.e)
+}
+
 // ReadConfig Read configuration
 // v config struct pointer
 func (a *App) ReadConfig(v any) *App {
@@ -161,13 +170,17 @@ func (a *App) ReadConfig(v any) *App {
 	return a
 }
 
+// PreRun The event before the Run method.
+// You can replace the configuration of the application here
+func (a *App) PreRun(f func()) *App {
+	a.preRunFunc = f
+	return a
+}
+
 // PreApply triggered before mvc starts, Before the project starts.
 // This is where you can provide basic services, such as set beans.
 // Of course, you can also perform logic here that doesn't require obtaining beans.
 func (a *App) PreApply(f func()) *App {
-	if f == nil {
-		logger.Log.Fatalf("apply before func cannot be null.")
-	}
 	a.preApplyFunc = f
 	return a
 }
