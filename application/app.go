@@ -170,8 +170,8 @@ func (a *App) ReadConfig(v any) *App {
 	return a
 }
 
-// PreRun The event before the Run method.
-// You can replace the configuration of the application here
+// PreRun The event before the Run method
+// such as replace the config of the application
 func (a *App) PreRun(f func()) *App {
 	a.preRunFunc = f
 	return a
