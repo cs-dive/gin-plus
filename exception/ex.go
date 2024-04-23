@@ -17,3 +17,10 @@ func NewBusinessErr(msg string) *BusinessException {
 func NewBusinessErrWithCode(code int, msg string) *BusinessException {
 	return &BusinessException{code, msg}
 }
+
+// OrThrow if err not nil, panic
+func OrThrow(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
