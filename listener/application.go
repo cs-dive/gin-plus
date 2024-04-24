@@ -2,12 +2,6 @@ package listener
 
 import "github.com/spf13/viper"
 
-type Type int // Listener type
-
-const (
-	ApplicationEvent Type = iota
-)
-
 // ApplicationListener Application listener
 type ApplicationListener interface{}
 

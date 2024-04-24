@@ -25,7 +25,7 @@ type App struct {
 	exitDelay      time.Duration
 	interceptors   []mvc.MethodInterceptor
 	ginMiddlewares []gin.HandlerFunc
-	listeners      map[listener.Type][]listener.ApplicationListener
+	listeners      []listener.ApplicationListener
 }
 
 // New Create a clean application, you can add some gin middlewares to the engine
@@ -35,20 +35,13 @@ func New(listeners []listener.ApplicationListener, middlewares ...gin.HandlerFun
 		ginMiddlewares: middlewares,
 	}
 	configured := false
-	if len(listeners) > 0 {
-		app.listeners = make(map[listener.Type][]listener.ApplicationListener)
-		for _, l := range listeners {
-			if cl, ok := l.(listener.ConfigListener); ok {
-				LoadApplicationConfigFile(cl)
-				configured = true
-				continue
-			}
-			if cache, ok := app.listeners[listener.ApplicationEvent]; !ok {
-				app.listeners[listener.ApplicationEvent] = []listener.ApplicationListener{l}
-			} else {
-				cache = append(cache, l)
-			}
+	for _, l := range listeners {
+		if cl, ok := l.(listener.ConfigListener); ok {
+			LoadApplicationConfigFile(cl)
+			configured = true
+			continue
 		}
+		app.listeners = append(app.listeners, l)
 	}
 	if !configured {
 		LoadApplicationConfigFile(nil)
@@ -119,8 +112,7 @@ func (a *App) Run() {
 	if banner.Banner != "" {
 		fmt.Print(banner.Banner)
 	}
-	applicationEvents := a.listeners[listener.ApplicationEvent]
-	listener.DoPreApply(applicationEvents)
+	listener.DoPreApply(a.listeners)
 	if len(a.interceptors) > 0 {
 		a.e.Use(func(context *gin.Context) {
 			var is []mvc.MethodInterceptor
@@ -143,7 +135,7 @@ func (a *App) Run() {
 		})
 	}
 	mvc.Apply(a.e, true)
-	listener.DoPreStart(applicationEvents)
+	listener.DoPreStart(a.listeners)
 	go func() {
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Log.Fatalf("Application start error, %s", err.Error())
@@ -154,13 +146,13 @@ func (a *App) Run() {
 	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
 	<-quit
 	logger.Log.Debug("Shutdown server ...")
-	listener.DoPreStop(applicationEvents)
+	listener.DoPreStop(a.listeners)
 	ctx, cancelFunc := context.WithTimeout(context.Background(), a.exitDelay)
 	defer cancelFunc()
 	if err := server.Shutdown(ctx); err != nil {
 		logger.Log.Fatalf("Server shutdown failure, %s", err.Error())
 	}
-	listener.DoPostStop(applicationEvents)
+	listener.DoPostStop(a.listeners)
 	logger.Log.Debug("Server exiting ...")
 }
 
