@@ -2,6 +2,7 @@ package application
 
 import (
 	"flag"
+	"github.com/archine/gin-plus/v3/listener"
 	"github.com/archine/gin-plus/v3/plugin/logger"
 	ioc "github.com/archine/ioc"
 	"github.com/spf13/viper"
@@ -10,7 +11,8 @@ import (
 
 // Project global configuration
 
-var Conf = &config{}
+// Conf project basic configuration
+var Conf *config
 
 const (
 	// Dev development environment
@@ -32,25 +34,31 @@ type config struct {
 }
 
 // LoadApplicationConfigFile load the application configuration file
-func LoadApplicationConfigFile(options []viper.Option) {
+func LoadApplicationConfigFile(l listener.ConfigListener) {
+	var v = viper.New()
 	var configFile string
 	flag.StringVar(&configFile, "c", "app.yml", "Absolute path to the project configuration file, default app.yml")
 	flag.Parse()
-	confReader := viper.NewWithOptions(options...)
-	confReader.SetConfigFile(configFile)
-	confReader.SetDefault("server.port", 4006)
-	confReader.SetDefault("server.env", Dev)
-	confReader.SetDefault("server.max_file_size", 104857600)
-	confReader.SetDefault("server.read_timeout", 0)  // 0 means no timeout
-	confReader.SetDefault("server.write_timeout", 0) // 0 means no timeout
-	confReader.AutomaticEnv()
-	if err := confReader.ReadInConfig(); err != nil {
+	v.SetConfigFile(configFile)
+	v.SetDefault("server.port", 4006)
+	v.SetDefault("server.env", Dev)
+	v.SetDefault("server.max_file_size", 104857600)
+	v.SetDefault("server.read_timeout", 0)  // 0 means no timeout
+	v.SetDefault("server.write_timeout", 0) // 0 means no timeout
+	v.AutomaticEnv()
+	var err error
+	if l != nil {
+		err = l.Read(v)
+	} else {
+		err = v.ReadInConfig()
+	}
+	if err != nil {
 		logger.Log.Fatalf("Init project config error, %s", err.Error())
 	}
-	if err := confReader.Unmarshal(Conf); err != nil {
+	if err = v.Unmarshal(&Conf); err != nil {
 		logger.Log.Fatalf("Parse project config error, %s", err.Error())
 	}
-	ioc.SetBeans(confReader)
+	ioc.SetBeans(v)
 }
 
 // GetConfReader Get config reader of the application

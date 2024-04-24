@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"github.com/archine/gin-plus/v3/banner"
 	"github.com/archine/gin-plus/v3/exception/interceptor"
+	"github.com/archine/gin-plus/v3/listener"
 	"github.com/archine/gin-plus/v3/mvc"
 	"github.com/archine/gin-plus/v3/plugin/logger"
 	"github.com/archine/ioc"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
-	"github.com/spf13/viper"
 	"net/http"
 	"os"
 	"os/signal"
@@ -22,39 +22,49 @@ import (
 // App application instance
 type App struct {
 	e              *gin.Engine
-	preApplyFunc   func()
-	preStartFunc   func()
-	preStopFunc    func()
 	exitDelay      time.Duration
 	interceptors   []mvc.MethodInterceptor
 	ginMiddlewares []gin.HandlerFunc
-	server         *http.Server
+	listeners      map[listener.Type][]listener.ApplicationListener
 }
 
 // New Create a clean application, you can add some gin middlewares to the engine
-func New(confOptions []viper.Option, middlewares ...gin.HandlerFunc) *App {
-	LoadApplicationConfigFile(confOptions)
+func New(listeners []listener.ApplicationListener, middlewares ...gin.HandlerFunc) *App {
+	app := &App{
+		exitDelay:      3 * time.Second,
+		ginMiddlewares: middlewares,
+	}
+	configured := false
+	if len(listeners) > 0 {
+		app.listeners = make(map[listener.Type][]listener.ApplicationListener)
+		for _, l := range listeners {
+			if cl, ok := l.(listener.ConfigListener); ok {
+				LoadApplicationConfigFile(cl)
+				configured = true
+				continue
+			}
+			if cache, ok := app.listeners[listener.ApplicationEvent]; !ok {
+				app.listeners[listener.ApplicationEvent] = []listener.ApplicationListener{l}
+			} else {
+				cache = append(cache, l)
+			}
+		}
+	}
+	if !configured {
+		LoadApplicationConfigFile(nil)
+	}
 	if Conf.Server.Env == Prod {
 		gin.SetMode(gin.ReleaseMode)
 	} else {
 		gin.SetMode(gin.DebugMode)
 	}
-	return &App{
-		exitDelay:      3 * time.Second,
-		ginMiddlewares: middlewares,
-		server: &http.Server{
-			Addr:                         fmt.Sprintf(":%d", Conf.Server.Port),
-			ReadTimeout:                  Conf.Server.ReadTimeout,
-			WriteTimeout:                 Conf.Server.WriteTimeout,
-			DisableGeneralOptionsHandler: true,
-		},
-	}
+	return app
 }
 
 // Default Create a default application with gin default logger, exception interception, and cross-domain middleware
-func Default(confOptions ...viper.Option) *App {
+func Default(listeners ...listener.ApplicationListener) *App {
 	return New(
-		confOptions,
+		listeners,
 		gin.Logger(),
 		interceptor.GlobalExceptionInterceptor,
 		cors.New(cors.Config{
@@ -93,7 +103,13 @@ func (a *App) Run() {
 		logger.Log = &logger.DefaultLog{}
 	}
 	a.e = gin.New()
-	a.server.Handler = a.e
+	server := &http.Server{
+		Addr:                         fmt.Sprintf(":%d", Conf.Server.Port),
+		ReadTimeout:                  Conf.Server.ReadTimeout,
+		WriteTimeout:                 Conf.Server.WriteTimeout,
+		DisableGeneralOptionsHandler: true,
+	}
+	server.Handler = a.e
 	if len(a.ginMiddlewares) > 0 {
 		a.e.Use(a.ginMiddlewares...)
 	}
@@ -103,24 +119,23 @@ func (a *App) Run() {
 	if banner.Banner != "" {
 		fmt.Print(banner.Banner)
 	}
-	if a.preApplyFunc != nil {
-		a.preApplyFunc()
-	}
+	applicationEvents := a.listeners[listener.ApplicationEvent]
+	listener.DoPreApply(applicationEvents)
 	if len(a.interceptors) > 0 {
 		a.e.Use(func(context *gin.Context) {
 			var is []mvc.MethodInterceptor
-			for _, interceptor := range a.interceptors {
-				if interceptor.Predicate(context) {
-					is = append(is, interceptor)
-					interceptor.PreHandle(context)
+			for _, ic := range a.interceptors {
+				if ic.Predicate(context) {
+					is = append(is, ic)
+					ic.PreHandle(context)
 				}
 				if context.IsAborted() {
 					return
 				}
 			}
 			context.Next()
-			for _, interceptor := range is {
-				interceptor.PostHandle(context)
+			for _, i := range is {
+				i.PostHandle(context)
 				if context.IsAborted() {
 					return
 				}
@@ -128,11 +143,9 @@ func (a *App) Run() {
 		})
 	}
 	mvc.Apply(a.e, true)
-	if a.preStartFunc != nil {
-		a.preStartFunc()
-	}
+	listener.DoPreStart(applicationEvents)
 	go func() {
-		if err := a.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Log.Fatalf("Application start error, %s", err.Error())
 		}
 	}()
@@ -141,14 +154,13 @@ func (a *App) Run() {
 	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
 	<-quit
 	logger.Log.Debug("Shutdown server ...")
-	if a.preStopFunc != nil {
-		a.preStopFunc()
-	}
+	listener.DoPreStop(applicationEvents)
 	ctx, cancelFunc := context.WithTimeout(context.Background(), a.exitDelay)
 	defer cancelFunc()
-	if err := a.server.Shutdown(ctx); err != nil {
+	if err := server.Shutdown(ctx); err != nil {
 		logger.Log.Fatalf("Server shutdown failure, %s", err.Error())
 	}
+	listener.DoPostStop(applicationEvents)
 	logger.Log.Debug("Server exiting ...")
 }
 
@@ -161,33 +173,13 @@ func (a *App) ReadConfig(v any) *App {
 	return a
 }
 
-// PreApply triggered before mvc starts, Before the project starts.
-// This is where you can provide basic services, such as set beans.
-// Of course, you can also perform logic here that doesn't require obtaining beans.
-func (a *App) PreApply(f func()) *App {
-	if f == nil {
-		logger.Log.Fatalf("apply before func cannot be null.")
+// ReadConfigSub Read configuration
+// v: config struct pointer
+// sub: sub configuration key
+func (a *App) ReadConfigSub(v any, sub string) *App {
+	if err := GetConfReader().Sub(sub).Unmarshal(v); err != nil {
+		logger.Log.Fatalf("read config error, %s", err.Error())
 	}
-	a.preApplyFunc = f
-	return a
-}
-
-// PreStart The last event before the project starts, dependency injection is all finished and ready to run.
-// You can execute any logic here.
-func (a *App) PreStart(f func()) *App {
-	a.preStartFunc = f
-	return a
-}
-
-// PreStop The event before the application stops can be performed here to close some resources
-func (a *App) PreStop(f func()) *App {
-	a.preStopFunc = f
-	return a
-}
-
-// PostStop Events after the application has stopped can perform other closing operations here
-func (a *App) PostStop(f func()) *App {
-	a.server.RegisterOnShutdown(f)
 	return a
 }
 
