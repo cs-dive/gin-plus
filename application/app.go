@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/archine/gin-plus/v3/application/middleware"
 	"github.com/archine/gin-plus/v3/banner"
 	"github.com/archine/gin-plus/v3/exception/interceptor"
 	"github.com/archine/gin-plus/v3/listener"
 	"github.com/archine/gin-plus/v3/mvc"
 	"github.com/archine/gin-plus/v3/plugin/logger"
 	"github.com/archine/ioc"
-	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"net/http"
 	"os"
@@ -56,19 +56,7 @@ func New(listeners []listener.ApplicationListener, middlewares ...gin.HandlerFun
 
 // Default Create a default application with gin default logger, exception interception, and cross-domain middleware
 func Default(listeners ...listener.ApplicationListener) *App {
-	return New(
-		listeners,
-		gin.Logger(),
-		interceptor.GlobalExceptionInterceptor,
-		cors.New(cors.Config{
-			AllowMethods:     []string{"PUT", "PATCH", "POST", "GET", "DELETE", "OPTIONS", "HEAD"},
-			AllowHeaders:     []string{"Origin", "Authorization", "Content-Type"},
-			ExposeHeaders:    []string{"Content-Length"},
-			AllowCredentials: true,
-			AllowOriginFunc: func(origin string) bool {
-				return true
-			},
-		}))
+	return New(listeners, gin.Logger(), interceptor.GlobalExceptionInterceptor, middleware.Cors())
 }
 
 // Banner Sets the project startup banner

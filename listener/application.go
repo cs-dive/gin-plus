@@ -36,27 +36,35 @@ type ConfigListener interface {
 // DoPreApply Trigger the PreApply event
 func DoPreApply(listeners []ApplicationListener) {
 	for _, l := range listeners {
-		l.(ApplicationEventListener).PreApply()
+		if ael, ok := l.(ApplicationEventListener); ok {
+			ael.PreApply()
+		}
 	}
 }
 
 // DoPreStart Trigger the PreStart event
 func DoPreStart(listeners []ApplicationListener) {
 	for _, l := range listeners {
-		l.(ApplicationEventListener).PreStart()
+		if ael, ok := l.(ApplicationEventListener); ok {
+			ael.PreStart()
+		}
 	}
 }
 
 // DoPreStop Trigger the PreStop event
 func DoPreStop(listeners []ApplicationListener) {
 	for _, l := range listeners {
-		l.(ApplicationEventListener).PreStop()
+		if ael, ok := l.(ApplicationEventListener); ok {
+			ael.PreStop()
+		}
 	}
 }
 
 // DoPostStop Trigger the PostStop event
 func DoPostStop(listeners []ApplicationListener) {
 	for _, l := range listeners {
-		l.(ApplicationEventListener).PostStop()
+		if ael, ok := l.(ApplicationEventListener); ok {
+			ael.PostStop()
+		}
 	}
 }

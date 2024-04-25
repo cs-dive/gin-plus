@@ -1,6 +1,8 @@
 package interceptor
 
 import (
+	"github.com/archine/gin-plus/v3/exception"
+	"github.com/archine/gin-plus/v3/plugin/logger"
 	"github.com/archine/gin-plus/v3/resp"
 	"github.com/gin-gonic/gin"
 )
@@ -11,8 +13,17 @@ import (
 func GlobalExceptionInterceptor(context *gin.Context) {
 	defer func() {
 		if r := recover(); r != nil {
-			resp.DirectRespErr(context, r)
-			context.Abort()
+			switch t := r.(type) {
+			case *exception.BusinessException:
+				exception.PrintSimpleStack(t)
+				resp.DirectRespWithCode(context, t.Code, t.Msg)
+			case error:
+				exception.PrintStack(t)
+				resp.SeverError(context, true)
+			default:
+				logger.Log.Error(r)
+				resp.SeverError(context, true)
+			}
 		}
 	}()
 	context.Next()
