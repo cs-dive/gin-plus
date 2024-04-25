@@ -1,14 +1,16 @@
 package resp
 
 import (
-	"errors"
+	"bytes"
 	"fmt"
 	"github.com/archine/gin-plus/v3/exception"
 	"github.com/archine/gin-plus/v3/plugin/logger"
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
+	"log"
 	"net/http"
 	"reflect"
+	"runtime"
 	"sync"
 )
 
@@ -198,16 +200,21 @@ func DirectRespWithCode(ctx *gin.Context, bCode int, format string, args ...any)
 	InitResp(ctx).WithBasic(bCode, fmt.Sprintf(format, args...), nil).To()
 }
 
-// DirectRespErr Respond directly with customize err
-func DirectRespErr(ctx *gin.Context, err error) {
-	result := InitResp(ctx).WithBasic(SystemErrorCode, "服务器异常,请联系管理员!", nil)
-	var businessErr *exception.BusinessException
-	if errors.As(err, &businessErr) {
-		result.WithBasic(businessErr.Code, businessErr.Msg, nil)
-	} else {
-		logger.Log.Error(err.Error())
+// DirectRespErr Respond directly with any err
+func DirectRespErr(ctx *gin.Context, err any) {
+	switch t := err.(type) {
+	case string:
+		DirectBadRequest(ctx, t)
+	case *exception.BusinessException:
+		printSimpleStack(t.Msg)
+		DirectRespWithCode(ctx, t.Code, t.Msg)
+	case error:
+		printStack(t)
+		SeverError(ctx, true)
+	default:
+		logger.Log.Error(t)
+		SeverError(ctx, true)
 	}
-	result.To()
 }
 
 // ChangeResultType Change the result type
@@ -249,4 +256,17 @@ func getValidMsg(err error, obj interface{}) string {
 	}
 	logger.Log.Error(err.Error())
 	return "参数错误"
+}
+
+func printStack(err error) {
+	var buf [2048]byte
+	n := runtime.Stack(buf[:], false)
+	log.Printf("%s %s", err.Error(), string(buf[:n]))
+}
+
+func printSimpleStack(err string) {
+	var buf [2048]byte
+	n := runtime.Stack(buf[:], false)
+	lines := bytes.Split(buf[:n], []byte("\n"))
+	log.Printf("%s\n%s", err, string(bytes.Join(lines[9:11], []byte("\n"))))
 }
